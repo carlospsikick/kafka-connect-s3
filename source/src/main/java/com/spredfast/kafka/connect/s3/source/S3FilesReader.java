@@ -1,17 +1,12 @@
 package com.spredfast.kafka.connect.s3.source;
 
 import static java.util.stream.Collectors.toList;
+import static org.apache.kafka.connect.data.Schema.BYTES_SCHEMA;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.function.BiPredicate;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -19,6 +14,8 @@ import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.amazonaws.AmazonClientException;
@@ -54,8 +51,9 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 	public static final Pattern DEFAULT_PATTERN = Pattern.compile(
 		"(\\/|^)"                        // match the / or the start of the key so we shouldn't have to worry about prefix
 			+ "(?<topic>[^/]+?)-"            // assuming no / in topic names
-			+ "(?<partition>\\d{5})-"
-			+ "(?<offset>\\d{12})\\.gz$"
+      + "(?<timestamp>\\d{8})-"
+      + "(?<partition>\\d{1,5})-"
+			+ "(?<offset>\\d{1,12})\\.gz$"
 	);
 
 	private final AmazonS3 s3Client;
@@ -109,7 +107,7 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 	private int partition(String key) {
 		final Matcher matcher = config.keyPattern.matcher(key);
 		if (!matcher.find()) {
-			throw new IllegalArgumentException("Not a valid chunk filename! " + key);
+			throw new IllegalArgumentException("Not a valid chunk filename! -partition- " + key);
 		}
 		return Integer.parseInt(matcher.group("partition"));
 	}
@@ -117,10 +115,18 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 	private String topic(String key) {
 		final Matcher matcher = config.keyPattern.matcher(key);
 		if (!matcher.find()) {
-			throw new IllegalArgumentException("Not a valid chunk filename! " + key);
+			throw new IllegalArgumentException("Not a valid chunk filename! -topic- " + key);
 		}
 		return matcher.group("topic");
 	}
+
+  private String timestamp(String key) {
+    final Matcher matcher = config.keyPattern.matcher(key);
+    if (!matcher.find()) {
+      throw new IllegalArgumentException("Not a valid chunk filename! -timestamp- " + key);
+    }
+    return matcher.group("timestamp");
+  }
 
 	public Iterator<S3SourceRecord> readAll() {
 		return new Iterator<S3SourceRecord>() {
@@ -147,19 +153,19 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 							// whatever the requested page size is, we'll need twice that
 							config.pageSize * 2
 						));
-						log.debug("aws ls {}/{} after:{} = {}", config.bucket, config.keyPrefix, config.startMarker,
+						log.info("aws ls {}/{} after:{} = {}", config.bucket, config.keyPrefix, config.startMarker,
 							LazyString.of(() -> objectListing.getObjectSummaries().stream().map(S3ObjectSummary::getKey).collect(toList())));
 					} else {
 						String marker = objectListing.getNextMarker();
 						objectListing = s3Client.listNextBatchOfObjects(objectListing);
-						log.debug("aws ls {}/{} after:{} = {}", config.bucket, config.keyPrefix, marker,
+						log.info("aws ls {}/{} after:{} = {}", config.bucket, config.keyPrefix, marker,
 							LazyString.of(() -> objectListing.getObjectSummaries().stream().map(S3ObjectSummary::getKey).collect(toList())));
 					}
 
 					List<S3ObjectSummary> chunks = new ArrayList<>(objectListing.getObjectSummaries().size() / 2);
 					for (S3ObjectSummary chunk : objectListing.getObjectSummaries()) {
 						if (DATA_SUFFIX.matcher(chunk.getKey()).find() && parseKeyUnchecked(chunk.getKey(),
-								(t, p, o) -> config.partitionFilter.matches(t, p))) {
+								(t, ts, p, o) -> config.partitionFilter.matches(t, p))) {
 							S3Offset offset = offset(chunk);
 							if (offset != null) {
 								// if our offset for this partition is beyond this chunk, ignore it
@@ -184,15 +190,17 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 
 					currentKey = file.getKey();
 					S3Offset offset = offset(file);
+          log.info("current Offset {} - {}", offset.getS3key(), offset.getOffset());
 					if (offset != null && offset.getS3key().equals(currentKey)) {
-						resumeFromOffset(offset);
+						//resumeFromOffset(offset);
+            log.info("continue to next");
 					} else {
-						log.debug("Now reading from {}", currentKey);
+						log.info("Now reading from {}", currentKey);
 						S3RecordsReader reader = makeReader.get();
 						InputStream content = getContent(s3Client.getObject(config.bucket, currentKey));
-						iterator = parseKey(currentKey, (topic, partition, startOffset) -> {
-							reader.init(topic,partition, content, startOffset);
-							return reader.readAll(topic, partition, content, startOffset);
+						iterator = parseKey(currentKey, (topic, timestamp, partition, startOffset) -> {
+							reader.init(topic,timestamp, partition, content, startOffset);
+							return reader.readAll(topic, timestamp, partition, content, startOffset);
 						});
 					}
 				} catch (IOException e) {
@@ -213,9 +221,10 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 			 * so we need to load the marker and find the offset to start from.
 			 */
 			private void resumeFromOffset(S3Offset offset) throws IOException {
-				log.debug("resumeFromOffset {}", offset);
+				log.info("resumeFromOffset {}", offset);
 				S3RecordsReader reader = makeReader.get();
 
+        log.info("now get {}", offset.getOffset() + 1);
 				ChunksIndex index = getChunksIndex(offset.getS3key());
 				ChunkDescriptor chunkDescriptor = index.chunkContaining(offset.getOffset() + 1)
 					.orElse(null);
@@ -228,15 +237,16 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 					nextObject();
 					return;
 				}
-
+        log.info("chunk descriptor {}", chunkDescriptor);
 				// if we got here, it is a real object and contains
 				// the offset we want to start at
 
 				// if need the start of the file for the read, let it read it
 				if (reader.isInitRequired() && chunkDescriptor.byte_offset > 0) {
+				  log.info("start of {}", offset.getS3key());
 					try (S3Object object = s3Client.getObject(new GetObjectRequest(config.bucket, offset.getS3key()))) {
-						parseKey(object.getKey(), (topic, partition, startOffset) -> {
-							reader.init(topic, partition, getContent(object), startOffset);
+						parseKey(object.getKey(), (topic, timestamp, partition, startOffset) -> {
+							reader.init(topic, timestamp, partition, getContent(object), startOffset);
 							return null;
 						});
 					}
@@ -244,14 +254,14 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 
 				GetObjectRequest request = new GetObjectRequest(config.bucket, offset.getS3key());
 				request.setRange(chunkDescriptor.byte_offset, index.totalSize());
-
+        log.info("get object req {}", request.getKey());
 				S3Object object = s3Client.getObject(request);
 
 				currentKey = object.getKey();
 				log.debug("Resume {}: Now reading from {}, reading {}-{}", offset, currentKey, chunkDescriptor.byte_offset, index.totalSize());
 
-				iterator = parseKey(object.getKey(), (topic, partition, startOffset) ->
-					reader.readAll(topic, partition, getContent(object), chunkDescriptor.first_record_offset));
+				iterator = parseKey(object.getKey(), (topic, timestamp, partition, startOffset) ->
+					reader.readAll(topic, timestamp, partition, getContent(object), chunkDescriptor.first_record_offset));
 
 				// skip records before the given offset
 				long recordSkipCount = offset.getOffset() - chunkDescriptor.first_record_offset + 1;
@@ -275,14 +285,15 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 			@Override
 			public S3SourceRecord next() {
 				ConsumerRecord<byte[], byte[]> record = iterator.next();
-				return new S3SourceRecord(
+				/*return new S3SourceRecord(
 					S3Partition.from(config.bucket, config.keyPrefix, record.topic(), record.partition()),
 					S3Offset.from(currentKey, record.offset()),
 					record.topic(),
 					record.partition(),
 					record.key(),
 					record.value()
-				);
+				);*/
+        return prepareS3SourceRecord(record, currentKey);
 			}
 
 			@Override
@@ -292,7 +303,64 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 		};
 	}
 
-	private <T> T parseKeyUnchecked(String key, QuietKeyConsumer<T> consumer) {
+
+	private S3SourceRecord prepareS3SourceRecord(ConsumerRecord<byte[], byte[]> record, String currentKey){
+    try {
+      S3ArchiveRecord archiveRecord = S3ArchiveRecord.fromJson(record.value());
+      List<Header> connectHeaders = new ArrayList<>();
+      List<S3ArchiveHeader> s3ArchiveHeaders = archiveRecord.getHeaders();
+      for (S3ArchiveHeader h : s3ArchiveHeaders) {
+        Header header = toConnectHeader(h.getKey(), h.getValue());
+        connectHeaders.add(header);
+      }
+      //add original kafka timestamp as an extra header
+      connectHeaders.add(toConnectHeader("x-message-orig-timestamp", archiveRecord.getTimestamp()));
+      return new S3SourceRecord(
+        S3Partition.from(config.bucket, config.keyPrefix, record.topic(), record.partition()),
+        S3Offset.from(currentKey, archiveRecord.getOffset()),
+        //@todo override with topic from config where this object is created
+        record.topic(),
+        record.partition(),
+        archiveRecord.getKeyBytes(),
+        archiveRecord.getValueB64Decoded(),
+        connectHeaders);
+    } catch (IOException e) {
+      e.printStackTrace();
+      return null;
+    }
+  }
+
+  private Header toConnectHeader(String key, Object value) {
+    return new Header() {
+      @Override
+      public String key() {
+        return key;
+      }
+
+      @Override
+      public Schema schema() {
+        return BYTES_SCHEMA;
+      }
+
+      @Override
+      public Object value() {
+        return value;
+      }
+
+      @Override
+      public Header with(Schema schema, Object o) {
+        return null;
+      }
+
+      @Override
+      public Header rename(String s) {
+        return null;
+      }
+    };
+  }
+
+
+  private <T> T parseKeyUnchecked(String key, QuietKeyConsumer<T> consumer) {
 		try {
 			return parseKey(key, consumer::consume);
 		} catch (IOException never) {
@@ -303,27 +371,28 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 	private <T> T parseKey(String key, KeyConsumer<T> consumer) throws IOException {
 		final Matcher matcher = config.keyPattern.matcher(key);
 		if (!matcher.find()) {
-			throw new IllegalArgumentException("Not a valid chunk filename! " + key);
+			throw new IllegalArgumentException("Not a valid chunk filename key! " + key);
 		}
 		final String topic = matcher.group("topic");
+    final String timestamp = matcher.group("timestamp");
 		final int partition = Integer.parseInt(matcher.group("partition"));
 		final long startOffset = Long.parseLong(matcher.group("offset"));
 
-		return consumer.consume(topic, partition, startOffset);
+		return consumer.consume(topic, timestamp, partition, startOffset);
 	}
 
 
 	private interface QuietKeyConsumer<T> {
-		T consume(String topic, int partition, long startOffset);
+		T consume(String topic, String timestamp, int partition, long startOffset);
 	}
 
 	private interface KeyConsumer<T> {
-		T consume(String topic, int partition, long startOffset) throws IOException;
+		T consume(String topic, String timestamp, int partition, long startOffset) throws IOException;
 	}
 
 	private ChunksIndex getChunksIndex(String key) throws IOException {
-		return indexParser.readValue(new InputStreamReader(s3Client.getObject(config.bucket, DATA_SUFFIX.matcher(key)
-			.replaceAll(".index.json")).getObjectContent()));
+	  log.info("Getting ChunksIndex for "+ key);
+		return indexParser.readValue(new InputStreamReader(s3Client.getObject(config.bucket, key).getObjectContent()));
 	}
 
 	/**

@@ -31,7 +31,7 @@ public class BytesRecordReader implements RecordReader {
 	 * @return a raw ConsumerRecord or null if at the end of the data stream.
 	 */
 	@Override
-	public ConsumerRecord<byte[], byte[]> read(String topic, int partition, long offset, BufferedInputStream data) throws IOException {
+	public ConsumerRecord<byte[], byte[]> read(String topic, String timestamp, int partition, long offset, BufferedInputStream data) throws IOException {
 		final byte[] key;
 		final int valSize;
 		if (includesKeys) {

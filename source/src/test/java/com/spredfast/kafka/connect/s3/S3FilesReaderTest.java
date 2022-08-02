@@ -1,8 +1,7 @@
 package com.spredfast.kafka.connect.s3;
 
 import static java.util.stream.Collectors.toList;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.*;
@@ -12,6 +11,7 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,9 +24,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.spredfast.kafka.connect.s3.source.*;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaAndValue;
@@ -36,7 +38,6 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.ListNextBatchOfObjectsRequest;
 import com.amazonaws.services.s3.model.ListObjectsRequest;
@@ -45,16 +46,31 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.spredfast.kafka.connect.s3.sink.BlockGZIPFileWriter;
-import com.spredfast.kafka.connect.s3.source.S3FilesReader;
-import com.spredfast.kafka.connect.s3.source.S3Offset;
-import com.spredfast.kafka.connect.s3.source.S3Partition;
-import com.spredfast.kafka.connect.s3.source.S3SourceConfig;
-import com.spredfast.kafka.connect.s3.source.S3SourceRecord;
 
 /**
  * Covers S3 and reading raw byte records. Closer to an integration test.
  */
 public class S3FilesReaderTest {
+
+  @Test
+  public void testRecordParsing() throws IOException {
+    final String value = "{\"headers\":[{\"key\":\"x-mqtt-dup\",\"value\":false},{\"key\":\"x-mqtt-publish-qos\",\"value\":1},{\"key\":\"x-shovelled-dest-uri\",\"value\":\"amqp:///nifi\"},{\"key\":\"x-shovelled-src-exchange\",\"value\":\"amq.topic\"},{\"key\":\"x-shovelled-src-exchange-key\",\"value\":\"#\"},{\"key\":\"x-shovelled-shovel-name\",\"value\":\"nifipump-ingest59\"},{\"key\":\"x-shovelled-shovelled-by\",\"value\":\"acrobatic-kingfisher\"},{\"key\":\"x-shovelled-dest-exchange\",\"value\":\"firehose.topic\"},{\"key\":\"x-shovelled-src-uri\",\"value\":\"amqp:///ingest59\"},{\"key\":\"x-shovelled-shovel-type\",\"value\":\"dynamic\"},{\"key\":\"x-shovelled-shovel-vhost\",\"value\":\"ingest59\"},{\"key\":\"x-amqp-routing-key\",\"value\":\"gz.v2.data.DK64G92\"},{\"key\":\"x-message-body-schema\",\"value\":\"BYTES_SCHEMA\"}],\"offset\":58108085,\"value\":\"Ilczc2laMkYwWlhkaGVTSTZleUp3WVdOclpYUmZiblZ0WW1WeUlqbzBOREU0TURJekxDSnljM05wWDNWd2JHbHVheUk2TFRZM0xDSnpaWEpwWVd3aU9pSkVTelkwUnpreUluMHNJbk5qYUdWdFlTSTZJbWRoZEdWM1lYbGZjMlZ1YzI5eVgyUmhkR0ZmZGpJdWMyTm9aVzFoTG1wemIyNGlMQ0p6Wlc1emIzSWlPbnNpYldGalgyRmtaSEpsYzNNaU9pSmlZem8xWlRwaE1Ub3dNRG93TURvd01EbzBPRG81TXlJc0ltMWxkSEpwWTNNaU9uc2lhSFZ0YVdScGRIa2lPalF4TGprM01qWTFOaXdpYzJOaGNDSTZOQ3dpYzNSdFgzQnliMkpsWDNOMFlYUmxJam95TENKMFpXMXdaWEpoZEhWeVpWOHdJam96TURBdU1qVXNJblJsYlhCbGNtRjBkWEpsWHpFaU9qTTFNaTR6TnpVc0luUmxiWEJsY21GMGRYSmxYeklpT2pNNE1DNHpOelVzSW5aallYQWlPak11T1RNM05YMHNJbkJoWTJ0bGRGOXVkVzFpWlhJaU9qRXlOaXdpZEd4MlgySmxjaUk2SWpVd01EWmpOREV5TURZeE5tTTJNVGMxTVRBeVpqa3lPVFUyTURFd01qVm1NekF3TVRObU5XWXpNVEF4TkRBaUxDSjFibk52YkdsamFYUmxaQ0k2Wm1Gc2MyVjlMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESXlMVEEzTFRJNFZEQXdPakF4T2pVNVdpSjlYUT09Ig==\",\"key\":null,\"timestamp\":\"2022-07-28T00:01:59.200Z\"}\n";
+    /*ObjectMapper mapper = new ObjectMapper();
+    S3ArchiveRecord record = mapper.readValue(value, S3ArchiveRecord.class);*/
+    S3ArchiveRecord record = S3ArchiveRecord.fromJson(value.getBytes(StandardCharsets.UTF_8));
+    assertNotNull(record);
+    assertEquals("2022-07-28T00:01:59.200Z", record.getTimestamp());
+    assertNull(record.getKey());
+    String val = record.getValue();
+    assertEquals( "Ilczc2laMkYwWlhkaGVTSTZleUp3WVdOclpYUmZiblZ0WW1WeUlqbzBOREU0TURJekxDSnljM05wWDNWd2JHbHVheUk2TFRZM0xDSnpaWEpwWVd3aU9pSkVTelkwUnpreUluMHNJbk5qYUdWdFlTSTZJbWRoZEdWM1lYbGZjMlZ1YzI5eVgyUmhkR0ZmZGpJdWMyTm9aVzFoTG1wemIyNGlMQ0p6Wlc1emIzSWlPbnNpYldGalgyRmtaSEpsYzNNaU9pSmlZem8xWlRwaE1Ub3dNRG93TURvd01EbzBPRG81TXlJc0ltMWxkSEpwWTNNaU9uc2lhSFZ0YVdScGRIa2lPalF4TGprM01qWTFOaXdpYzJOaGNDSTZOQ3dpYzNSdFgzQnliMkpsWDNOMFlYUmxJam95TENKMFpXMXdaWEpoZEhWeVpWOHdJam96TURBdU1qVXNJblJsYlhCbGNtRjBkWEpsWHpFaU9qTTFNaTR6TnpVc0luUmxiWEJsY21GMGRYSmxYeklpT2pNNE1DNHpOelVzSW5aallYQWlPak11T1RNM05YMHNJbkJoWTJ0bGRGOXVkVzFpWlhJaU9qRXlOaXdpZEd4MlgySmxjaUk2SWpVd01EWmpOREV5TURZeE5tTTJNVGMxTVRBeVpqa3lPVFUyTURFd01qVm1NekF3TVRObU5XWXpNVEF4TkRBaUxDSjFibk52YkdsamFYUmxaQ0k2Wm1Gc2MyVjlMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESXlMVEEzTFRJNFZEQXdPakF4T2pVNVdpSjlYUT09Ig==",
+      val);
+    List<S3ArchiveHeader> s3ArchiveHeaders = record.getHeaders();
+    for (S3ArchiveHeader h : s3ArchiveHeaders) {
+      if (h.getKey().equals("x-shovelled-src-exchange")) {
+        assertEquals("amq.topic", h.getValue());
+      }
+    }
+  }
 
 	@Test
 	public void testReadingBytesFromS3() throws IOException {
@@ -91,7 +107,7 @@ public class S3FilesReaderTest {
 		final AmazonS3 client = givenAMockS3Client(dir);
 
 		List<String> results = whenTheRecordsAreRead(givenAReaderWithOffsets(client,
-			"prefix/2015-12-31/topic-00003-000000000001.gz", 5L, "00003"));
+			"prefix/20151231/topic-00000000-00003-000000000001.gz", 5L, "00003"));
 
 		assertEquals(Arrays.asList(
 			"willbe=skipped5",
@@ -102,6 +118,28 @@ public class S3FilesReaderTest {
 		), results);
 	}
 
+  @Test
+  public void testParseKeyPattern() throws IOException {
+	  String fileKey="2022/20220101/firehose-20220711-3-54386117.gz";
+    Pattern keyPattern = S3FilesReader.DEFAULT_PATTERN;
+
+    final Matcher matcher = keyPattern.matcher(fileKey);
+    boolean found = matcher.find();
+    assertTrue(found);
+    final String topic = matcher.group("topic");
+    assertEquals("firehose", topic);
+    final String timestamp = matcher.group("timestamp");
+    assertEquals("20220711", timestamp);
+    final int partition = Integer.parseInt(matcher.group("partition"));
+    assertEquals(3, partition);
+    final long startOffset = Long.parseLong(matcher.group("offset"));
+    assertEquals(54386117, startOffset);
+
+    Pattern DATA_SUFFIX = Pattern.compile("\\.gz$");
+    String result = DATA_SUFFIX.matcher(fileKey).replaceAll(".index.json");
+    assertEquals(fileKey, result);
+
+  }
 
 	@Test
 	public void testReadingBytesFromS3_withOffsetsAtEndOfFile() throws IOException {
@@ -112,7 +150,7 @@ public class S3FilesReaderTest {
 
 		// this file will be skipped
 		List<String> results = whenTheRecordsAreRead(givenAReaderWithOffsets(client,
-			"prefix/2015-12-30/topic-00003-000000000000.gz", 1L, "00003"));
+			"prefix/20151230/topic-00000000-00003-000000000000.gz", 1L, "00003"));
 
 		assertEquals(Arrays.asList(
 			"willbe=skipped1",
@@ -317,9 +355,9 @@ public class S3FilesReaderTest {
 	}
 
 	private void givenASingleDayWithManyPartitions(Path dir, boolean includeKeys) throws IOException {
-		new File(dir.toFile(), "prefix/2016-01-01").mkdirs();
-		try (BlockGZIPFileWriter p0 = new BlockGZIPFileWriter("topic-00000", dir.toString() + "/prefix/2016-01-01", 0, 512);
-			 BlockGZIPFileWriter p1 = new BlockGZIPFileWriter("topic-00001", dir.toString() + "/prefix/2016-01-01", 0, 512);
+		new File(dir.toFile(), "prefix/20160101").mkdirs();
+		try (BlockGZIPFileWriter p0 = new BlockGZIPFileWriter("topic-00000000-00000", dir.toString() + "/prefix/20160101", 0, 512);
+			 BlockGZIPFileWriter p1 = new BlockGZIPFileWriter("topic-00000000-00001", dir.toString() + "/prefix/20160101", 0, 512);
 		) {
 			write(p0, "key0-0".getBytes(), "value0-0".getBytes(), includeKeys);
 			write(p1, "key1-0".getBytes(), "value1-0".getBytes(), includeKeys);
@@ -332,14 +370,14 @@ public class S3FilesReaderTest {
 	}
 
 	private void givenSomeData(Path dir, boolean includeKeys) throws IOException {
-		new File(dir.toFile(), "prefix/2015-12-30").mkdirs();
-		new File(dir.toFile(), "prefix/2015-12-31").mkdirs();
-		new File(dir.toFile(), "prefix/2016-01-01").mkdirs();
-		new File(dir.toFile(), "prefix/2016-01-02").mkdirs();
-		try (BlockGZIPFileWriter writer0 = new BlockGZIPFileWriter("topic-00003", dir.toString() + "/prefix/2015-12-31", 1, 512);
-			 BlockGZIPFileWriter writer1 = new BlockGZIPFileWriter("topic-00000", dir.toString() + "/prefix/2016-01-01", 0, 512);
-			 BlockGZIPFileWriter writer2 = new BlockGZIPFileWriter("topic-00001", dir.toString() + "/prefix/2016-01-02", 0, 512);
-			 BlockGZIPFileWriter preWriter1 = new BlockGZIPFileWriter("topic-00003", dir.toString() + "/prefix/2015-12-30", 0, 512);
+		new File(dir.toFile(), "prefix/20151230").mkdirs();
+		new File(dir.toFile(), "prefix/20151231").mkdirs();
+		new File(dir.toFile(), "prefix/20160101").mkdirs();
+		new File(dir.toFile(), "prefix/20160102").mkdirs();
+		try (BlockGZIPFileWriter writer0 = new BlockGZIPFileWriter("topic-00000000-00003", dir.toString() + "/prefix/20151231", 1, 512);
+			 BlockGZIPFileWriter writer1 = new BlockGZIPFileWriter("topic-00000000-00000", dir.toString() + "/prefix/20160101", 0, 512);
+			 BlockGZIPFileWriter writer2 = new BlockGZIPFileWriter("topic-00000000-00001", dir.toString() + "/prefix/20160102", 0, 512);
+			 BlockGZIPFileWriter preWriter1 = new BlockGZIPFileWriter("topic-00000000-00003", dir.toString() + "/prefix/20151230", 0, 512);
 		) {
 			write(preWriter1, "willbe".getBytes(), "skipped0".getBytes(), includeKeys);
 

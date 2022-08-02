@@ -58,10 +58,10 @@ public class FormatTests {
 		ByteArrayInputStream in = new ByteArrayInputStream(boas.toByteArray());
 		S3RecordsReader reader = format.newReader();
 		if (reader.isInitRequired()) {
-			reader.init("topic", 0, in, startOffset);
+			reader.init("topic", "00000000", 0, in, startOffset);
 		}
 		List<ConsumerRecord<byte[], byte[]>> results = new ArrayList<>();
-		reader.readAll("topic", 0, in, startOffset).forEachRemaining(results::add);
+		reader.readAll("topic", "00000000",0, in, startOffset).forEachRemaining(results::add);
 		return results;
 	}
 

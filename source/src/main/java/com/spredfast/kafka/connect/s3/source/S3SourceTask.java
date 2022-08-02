@@ -5,17 +5,11 @@ import static java.util.stream.Collectors.toMap;
 import static java.util.stream.Collectors.toSet;
 
 import java.io.UnsupportedEncodingException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.apache.kafka.common.utils.SystemTime;
+import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -50,6 +44,7 @@ public class S3SourceTask extends SourceTask {
 	private long s3PollInterval = 10_000L;
 	private long errorBackoff = 1000L;
 	private Map<S3Partition, S3Offset> offsets;
+  private final Time time = new SystemTime();
 
 	@Override
 	public String version() {
@@ -180,17 +175,36 @@ public class S3SourceTask extends SourceTask {
 		for (int i = 0; reader.hasNext() && i < maxPoll && !stopped.get(); i++) {
 			S3SourceRecord record = reader.next();
 			updateOffsets(record.file(), record.offset());
-			String topic = topicMapping.computeIfAbsent(record.topic(), this::remapTopic);
+      //@todo override with topic from config where this object is created
+      String topic = topicMapping.computeIfAbsent(record.topic(), this::remapTopic);
 			// we know the reader returned bytes so, we can cast the key+value and use a converter to
 			// generate the "real" source record
 			Optional<SchemaAndValue> key = keyConverter.map(c -> c.toConnectData(topic, record.key()));
 			SchemaAndValue value = valueConverter.toConnectData(topic, record.value());
-			results.add(new SourceRecord(record.file().asMap(), record.offset().asMap(), topic,
+      long timestamp = this.time.milliseconds();
+			results.add(new SourceRecord(
+			  //sourcePartition
+			  record.file().asMap(),
+        //sourceOffset
+        record.offset().asMap(),
+        //topic
+        topic,
+				//partition
 				record.partition(),
-				key.map(SchemaAndValue::schema).orElse(null), key.map(SchemaAndValue::value).orElse(null),
-				value.schema(), value.value()));
+				//keySchema
+				key.map(SchemaAndValue::schema).orElse(null),
+        //key
+        key.map(SchemaAndValue::value).orElse(null),
+				//value schema
+				value.schema(),
+        //value
+        value.value(),
+        //timestamp
+        timestamp,
+        //headers
+        record.headers()
+        ));
 		}
-
 		log.debug("{} returning {} records.", name(), results.size());
 		return results;
 	}

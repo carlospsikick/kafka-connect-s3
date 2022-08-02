@@ -22,11 +22,12 @@ public interface S3RecordsReader {
 	 * from the given input stream before init() returns.
 	 *
 	 * @param topic the topic archive being read.
+   * @param timestamp the timestamp of the file to be read.
 	 * @param partition partition of the file to be read.
 	 * @param inputStream the input stream at the start of the file.
 	 * @param startOffset the offset at the start of the file (may be different from the offset passed to readAll!)
 	 */
-	default void init(String topic, int partition, InputStream inputStream, long startOffset) {}
+	default void init(String topic, String timestamp, int partition, InputStream inputStream, long startOffset) {}
 
-	Iterator<ConsumerRecord<byte[], byte[]>> readAll(final String topic, final int partition, final InputStream inputStream, final long startOffset);
+	Iterator<ConsumerRecord<byte[], byte[]>> readAll(final String topic, final String timestamp, final int partition, final InputStream inputStream, final long startOffset);
 }

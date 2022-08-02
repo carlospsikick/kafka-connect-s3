@@ -26,7 +26,7 @@ public class DelimitedRecordReader implements RecordReader {
 	}
 
 	@Override
-	public ConsumerRecord<byte[], byte[]> read(String topic, int partition, long offset, BufferedInputStream data) throws IOException {
+	public ConsumerRecord<byte[], byte[]> read(String topic, String timestamp, int partition, long offset, BufferedInputStream data) throws IOException {
 		Optional<byte[]> key = Optional.empty();
 		if (keyDelimiter.isPresent()) {
 			key = Optional.ofNullable(readTo(data, keyDelimiter.get()));
