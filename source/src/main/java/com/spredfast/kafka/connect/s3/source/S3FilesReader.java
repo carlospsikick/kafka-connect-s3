@@ -153,6 +153,7 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 							// whatever the requested page size is, we'll need twice that
 							config.pageSize * 2
 						));
+
 						log.info("aws ls {}/{} after:{} = {}", config.bucket, config.keyPrefix, config.startMarker,
 							LazyString.of(() -> objectListing.getObjectSummaries().stream().map(S3ObjectSummary::getKey).collect(toList())));
 					} else {
@@ -190,8 +191,9 @@ public class S3FilesReader implements Iterable<S3SourceRecord> {
 
 					currentKey = file.getKey();
 					S3Offset offset = offset(file);
-          log.info("current Offset {} - {}", offset.getS3key(), offset.getOffset());
+
 					if (offset != null && offset.getS3key().equals(currentKey)) {
+            log.info("current Offset {} - {}", offset.getS3key(), offset.getOffset());
 						//resumeFromOffset(offset);
             log.info("continue to next");
 					} else {

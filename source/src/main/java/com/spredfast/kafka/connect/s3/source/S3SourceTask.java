@@ -123,7 +123,7 @@ public class S3SourceTask extends SourceTask {
 				&& partitionNumbers.contains(partition))
 		);
 
-		log.debug("{} reading from S3 with offsets {}", name(), offsets);
+		log.info("{} reading from S3 with offsets {}", name(), offsets);
 
 		reader = new S3FilesReader(config, client, offsets, format::newReader).readAll();
 	}
