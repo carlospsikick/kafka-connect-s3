@@ -14,12 +14,12 @@ import org.apache.kafka.connect.errors.DataException;
  */
 public interface RecordReader extends S3RecordsReader {
 
-	ConsumerRecord<byte[], byte[]> read(String topic, int partition, long offset, BufferedInputStream data) throws IOException;
+	ConsumerRecord<byte[], byte[]> read(String topic, String timestamp, int partition, long offset, BufferedInputStream data) throws IOException;
 
 	static RecordReader of(RecordReader r) { return r; }
 
 	@Override
-	default Iterator<ConsumerRecord<byte[], byte[]>> readAll(final String topic, final int partition, final InputStream inputStream, final long startOffset) {
+	default Iterator<ConsumerRecord<byte[], byte[]>> readAll(final String topic, final String timestamp, final int partition, final InputStream inputStream, final long startOffset) {
 		return new Iterator<ConsumerRecord<byte[], byte[]>>() {
 			ConsumerRecord<byte[], byte[]> next;
 
@@ -31,7 +31,7 @@ public interface RecordReader extends S3RecordsReader {
 			public boolean hasNext() {
 				try {
 					if (next == null) {
-						next = read(topic, partition, offset++, buffered);
+						next = read(topic, timestamp, partition, offset++, buffered);
 					}
 				} catch (IOException e) {
 					throw new DataException(e);
